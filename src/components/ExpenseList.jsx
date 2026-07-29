@@ -45,16 +45,18 @@ export default function ExpenseList({ entries, onDelete, onEdit, onPatch }) {
         <ul className="list">
           {rows.map(e => (
             <li key={e.id}>
-              <span className="li-ic">{e.type === 'income' ? '💰' : e.type === 'saving' ? '🏦' : (CAT_ICON[e.category] || '🧾')}</span>
+              {e.receipt ? <img className="li-rcpt" src={e.receipt} alt="" /> : <span className="li-ic">{e.type === 'income' ? '💰' : e.type === 'saving' ? '🏦' : (CAT_ICON[e.category] || '🧾')}</span>}
               <span className="li-mid">
                 <b>{e.type === 'income' ? 'Income' : e.type === 'saving' ? 'Savings' : e.category}
-                  {e.reimbursable && <span className={'tag ' + (e.settled ? 'ok' : 'warn')}>{e.settled ? 'collected' : 'to collect'}</span>}</b>
+                  {e.reimbursable && <span className={'tag ' + (e.settled ? 'ok' : 'warn')}>{e.settled ? 'collected' : 'to collect'}</span>}
+                  {!e.reimbursable && e.owed > 0 && <span className={'tag ' + (e.settled ? 'ok' : 'warn')}>{e.owedBy || 'owed'} +{inr(e.owed)}</span>}
+                  {e.taxSection && <span className="tag tax">{e.taxSection}</span>}</b>
                 <small>{e.date} · {e.method}{e.note ? ` · ${e.note}` : ''}</small>
               </span>
               <span className={'li-amt' + (e.type === 'income' || e.type === 'saving' ? ' good' : '')}>
                 {e.type === 'income' ? '+' : e.type === 'saving' ? '→' : '−'}{inr(e.amount)}</span>
               <div className="li-act">
-                {e.reimbursable && <button className="ico" title={e.settled ? 'Mark not collected' : 'Mark collected'} onClick={() => onPatch(e.id, { settled: !e.settled })}>{e.settled ? '↩' : '✓'}</button>}
+                {(e.reimbursable || e.owed > 0) && <button className="ico" title={e.settled ? 'Mark not collected' : 'Mark collected'} onClick={() => onPatch(e.id, { settled: !e.settled })}>{e.settled ? '↩' : '✓'}</button>}
                 <button className="ico" title="Edit" onClick={() => onEdit(e)}>✎</button>
                 <button className="ico del" title="Delete" onClick={() => onDelete(e.id)}>✕</button>
               </div>

@@ -1,12 +1,23 @@
 import { useState } from 'react'
 import {
-  loanSchedule, receivables, taxSummary, TAX_LIMITS, goalSaved,
-  monthLabel, monthShort, inr, uid, todayISO, curFY
+  loanSchedule, receivables, taxSummary, TAX_LIMITS, goalSaved, CAT_KEYS, CAT_ICON,
+  monthLabel, monthShort, inr, uid, todayISO, curFY, avgMonthlySpend, totalSaved, goalETA, yearReview
 } from '../data.js'
 
+const WHATIF_CATS = ['Weekend Travel', 'Snacks / Chips', 'Food & Groceries', 'Girlfriend', 'Weekday Commute', 'Miscellaneous']
+
 export default function Money({ entries, archives = [], settings, setSettings, addEntry, onRestore, onDelete }) {
-  const allSaving = [...entries, ...archives.flatMap(a => a.entries || [])]
+  const allEntries = [...entries, ...archives.flatMap(a => a.entries || [])]
+  const allSaving = allEntries
   const loan = loanSchedule(settings.loan)
+  const totalBudget = CAT_KEYS.reduce((s, k) => s + (+settings.budgets[k] || 0), 0)
+  const plannedRate = Math.max(0, (+settings.salary || 0) - totalBudget)     // monthly savings capacity
+  const avgSpend = avgMonthlySpend(allEntries)
+  const savedAll = totalSaved(allSaving)
+  const runway = avgSpend > 0 ? savedAll / avgSpend : 0
+  const yr = yearReview(allEntries, settings)
+  const [cuts, setCuts] = useState({})
+  const whatifMonthly = WHATIF_CATS.reduce((s, k) => s + (+settings.budgets[k] || 0) * ((cuts[k] || 0) / 100), 0)
   const owed = receivables(entries)
   const tax = taxSummary(entries, settings)
   const nw = settings.netWorth || []
@@ -33,11 +44,51 @@ export default function Money({ entries, archives = [], settings, setSettings, a
             <div key={g.id} className="goalline">
               <div className="between"><span>{g.name}</span><span className="muted">{inr(saved)} / {inr(g.target)}</span></div>
               <div className="bar"><div className="fill" style={{ width: pct + '%', background: 'linear-gradient(90deg,#0EA5A4,#16A34A)' }} /></div>
-              <div className="between sm"><span className="muted">{pct.toFixed(0)}% funded</span>
+              <div className="between sm"><span className="muted">{pct.toFixed(0)}% funded{(() => { const eta = goalETA(saved, g.target, plannedRate); return eta.done ? ' · 🎉 reached!' : eta.date ? ` · ~${monthLabel(eta.date)} at ${inr(plannedRate)}/mo` : '' })()}</span>
                 <button className="btn sm" onClick={() => { const v = prompt(`Add to “${g.name}” (₹)`); const n = Number(v); if (n > 0) addEntry({ id: uid(), type: 'saving', amount: n, category: 'Savings', method: 'UPI', date: todayISO(), note: g.name, goalId: g.id }) }}>+ Contribute</button></div>
             </div>
           )
         })}
+      </div>
+
+      {/* Savings runway */}
+      <div className="card pad">
+        <b>🛟 Savings runway</b>
+        <div className="nwbig">{runway.toFixed(1)} <span className="sm muted">months of expenses covered</span></div>
+        <div className="sm muted">Savings {inr(savedAll)} ÷ avg spend {inr(avgSpend)}/mo. {runway >= 6 ? 'Solid emergency buffer 💪' : runway >= 3 ? 'Getting there — aim for 6 months.' : 'Below the 3-month safety line — prioritise the emergency fund.'}</div>
+      </div>
+
+      {/* What-if simulator */}
+      <div className="card pad">
+        <b>🎛️ What-if simulator</b>
+        <p className="muted sm">Drag to cut a category and see the impact — no data is changed.</p>
+        {WHATIF_CATS.map(k => (
+          <div className="wifrow" key={k}>
+            <span className="wiflabel">{CAT_ICON[k]} {k}</span>
+            <input type="range" min="0" max="100" step="5" value={cuts[k] || 0} onChange={e => setCuts(c => ({ ...c, [k]: +e.target.value }))} />
+            <span className="wifval">−{inr((+settings.budgets[k] || 0) * ((cuts[k] || 0) / 100))}</span>
+          </div>
+        ))}
+        <div className="callout good">Cutting these saves <b>{inr(whatifMonthly)}/mo</b> = <b>{inr(whatifMonthly * 12)}/yr</b>.
+          {settings.goals?.[0] && whatifMonthly > 0 && (() => {
+            const g = settings.goals[0]; const saved = goalSaved(allSaving, g.id)
+            const base = goalETA(saved, g.target, plannedRate).months, faster = goalETA(saved, g.target, plannedRate + whatifMonthly).months
+            return base && faster ? ` Reaches “${g.name}” ${Math.max(0, base - faster)} months sooner.` : ''
+          })()}
+        </div>
+      </div>
+
+      {/* Year in review */}
+      <div className="card pad">
+        <b>🎬 Year in review — FY {yr.fy}</b>
+        <div className="kpis" style={{ marginTop: 8 }}>
+          <div className="kpi ink"><div className="kv">{inr(yr.income)}</div><div className="kl">Earned</div></div>
+          <div className="kpi blue"><div className="kv">{inr(yr.spent)}</div><div className="kl">Spent</div></div>
+          <div className="kpi good"><div className="kv">{inr(yr.saved)}</div><div className="kl">To savings</div></div>
+          <div className="kpi"><div className="kv">{yr.months}</div><div className="kl">Months tracked</div></div>
+        </div>
+        {yr.biggestMonth && <div className="sm muted" style={{ marginTop: 8 }}>Biggest spending month: <b>{monthLabel(yr.biggestMonth.ym)}</b> ({inr(yr.biggestMonth.amt)}).</div>}
+        {yr.topCats.length > 0 && <div className="chips" style={{ marginTop: 6 }}>{yr.topCats.map(c => <span className="chip" key={c.key}>{c.icon} {c.key} {inr(c.amt)}</span>)}</div>}
       </div>
 
       {/* Loan payoff */}
@@ -82,6 +133,7 @@ export default function Money({ entries, archives = [], settings, setSettings, a
       <div className="card pad">
         <b>📈 Net worth</b>
         {latestNW && <div className="nwbig">{inr(latestNW.net)}<span className="sm muted"> as of {latestNW.date}</span></div>}
+        {latestNW && plannedRate > 0 && <div className="callout">Saving {inr(plannedRate)}/mo → net worth ≈ <b>{inr(latestNW.net + plannedRate * 36)}</b> in 3 years.</div>}
         <div className="row2" style={{ marginTop: 8 }}>
           <label className="field"><span>Assets (bank + investments) ₹</span><input type="number" value={assets} onChange={e => setAssets(e.target.value)} /></label>
           <label className="field"><span>Liabilities (loans + card) ₹</span><input type="number" value={liab} onChange={e => setLiab(e.target.value)} /></label>

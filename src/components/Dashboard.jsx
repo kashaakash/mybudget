@@ -1,4 +1,4 @@
-import { curMonth, monthLabel, buildReport, goalSaved, receivables, inr, COLORS, CAT_ICON, daysInMonth, todayISO } from '../data.js'
+import { curMonth, monthLabel, buildReport, goalSaved, receivables, inr, COLORS, CAT_ICON, daysInMonth, todayISO, monthEndForecast, streaks, weeklyDigest } from '../data.js'
 
 export default function Dashboard({ entries, archives = [], settings, onQuickAdd, onGoto }) {
   const allSaving = [...entries, ...archives.flatMap(a => a.entries || [])]
@@ -20,6 +20,10 @@ export default function Dashboard({ entries, archives = [], settings, onQuickAdd
     return { ...b, inDays: dd }
   }).filter(b => b.inDays <= 5).sort((a, b) => a.inDays - b.inDays)
 
+  const fc = monthEndForecast(entries, settings, ym)
+  const st = streaks(entries)
+  const wk = weeklyDigest(entries)
+
   return (
     <div className="stack">
       <div className="hdrow"><h2>{monthLabel(ym)}</h2><button className="btn primary" onClick={onQuickAdd}>+ Add</button></div>
@@ -35,6 +39,19 @@ export default function Dashboard({ entries, archives = [], settings, onQuickAdd
         <div className="between"><b>💡 Safe to spend today</b><span className="allowbig">{inr(allowance)}</span></div>
         <div className="sm muted">{daysLeft} days left · keeps you within {inr(budgetBase)} this month</div>
       </div>
+
+      <div className="statchips">
+        <span className="statchip">🔥 <b>{st.logStreak}</b> day streak</span>
+        <span className="statchip">🟢 <b>{st.noSpend}</b> no-spend days</span>
+        <span className="statchip">📅 7d: <b>{inr(wk.spent)}</b>{wk.top ? ` · ${wk.top.cat}` : ''}</span>
+      </div>
+
+      {fc.income > 0 && (
+        <div className="card pad">
+          <div className="between"><b>🔮 Projected month-end</b><span className={'allowbig ' + (fc.projSaved >= 0 ? 'good' : 'bad')}>{fc.projSaved >= 0 ? 'save ' : 'short '}{inr(Math.abs(fc.projSaved))}</span></div>
+          <div className="sm muted">At your current pace (~{inr(fc.dailyRate)}/day{fc.unpostedRec > 0 ? ` + ${inr(fc.unpostedRec)} recurring due` : ''}), you'll spend ~{inr(fc.projSpend)} of {inr(fc.income)}.</div>
+        </div>
+      )}
 
       {dueSoon.length > 0 && (
         <div className="card pad warnbox">

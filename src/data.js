@@ -50,6 +50,7 @@ export const DEFAULT_SETTINGS = {
   cloud: { url: '', key: '', table: 'paisa', syncId: '', enabled: false },
   lastCategory: 'Food & Groceries',
   lastMethod: 'UPI',
+  dismissedRecurring: [],
 }
 
 export function mergeSettings(stored) {
@@ -202,6 +203,113 @@ export function suggestCategory(note, entries) {
   if (!hits.length) return null
   const c = {}; hits.forEach(e => c[e.category] = (c[e.category] || 0) + 1)
   return Object.entries(c).sort((a, b) => b[1] - a[1])[0][0]
+}
+
+// ================= v4: detection, voice, forecasting, behavioral =================
+const med = (arr) => { const a = [...arr].sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : 1 }
+const shiftISO = (iso, d) => { const t = new Date(iso + 'T00:00:00'); t.setDate(t.getDate() + d); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}` }
+
+export function detectRecurring(entries, settings) {
+  const dismissed = new Set(settings.dismissedRecurring || [])
+  const existing = settings.recurring || []
+  const exp = entries.filter(e => (e.type === 'expense' || !e.type) && !e.reimbursable)
+  const g = {}
+  for (const e of exp) { const amt = Math.round(+e.amount || 0); if (amt < 300) continue; const key = `${e.category}|${amt}`; (g[key] ||= { category: e.category, amount: amt, months: new Set(), count: 0, days: [] }); g[key].months.add(monthOf(e.date)); g[key].count++; g[key].days.push(+e.date.slice(8) || 1) }
+  const out = []
+  for (const [key, v] of Object.entries(g)) {
+    if (dismissed.has(key)) continue
+    const m = v.months.size
+    if (m < 2 || v.count > m * 2) continue
+    if (existing.some(r => r.category === v.category && Math.abs((+r.amount) - v.amount) < Math.max(50, v.amount * 0.1))) continue
+    out.push({ key, category: v.category, icon: CAT_ICON[v.category] || '🧾', amount: v.amount, months: m, day: med(v.days) })
+  }
+  return out.sort((a, b) => b.months - a.months || b.amount - a.amount).slice(0, 6)
+}
+
+const VOICE_MAP = [
+  [/auto|rickshaw|\bcab\b|uber|\bola\b|commute|office/, 'Weekday Commute'],
+  [/\bbus\b|train|metro|rapido|weekend|home trip/, 'Weekend Travel'],
+  [/petrol|fuel|diesel/, 'Petrol'],
+  [/chips|snack|namkeen|biscuit|cola|coke/, 'Snacks / Chips'],
+  [/food|lunch|dinner|breakfast|swiggy|zomato|grocery|groceries|restaurant|cafe|coffee|\btea\b|meal/, 'Food & Groceries'],
+  [/girlfriend|\bgf\b|\bdate\b/, 'Girlfriend'],
+  [/parent|\bmom\b|mother|\bdad\b|father/, 'Parents'],
+  [/family|home/, 'Home / Family'],
+  [/\brent\b|landlord/, 'Rent'],
+  [/barber|haircut|salon/, 'Barber'],
+  [/water|\bjar\b|\bcan\b/, 'Water'],
+  [/netflix|spotify|subscription|prime|hotstar|youtube/, 'Subscriptions'],
+  [/emi|loan/, 'Car EMI'],
+]
+export function parseVoice(text) {
+  if (!text) return null
+  const t = text.toLowerCase()
+  const m = t.match(/(\d+(?:\.\d+)?)/)
+  const amount = m ? Number(m[1]) : ''
+  let category = null; for (const [re, cat] of VOICE_MAP) if (re.test(t)) { category = cat; break }
+  const income = /received|got|salary|credited|refund|income|bonus/.test(t)
+  const onM = t.match(/(?:on|for|to)\s+(.{2,30})/)
+  return { amount, category, note: onM ? onM[1].trim() : text, type: income ? 'income' : 'expense' }
+}
+
+export function avgMonthlySpend(allEntries) {
+  const exp = allEntries.filter(e => (e.type === 'expense' || !e.type) && !e.reimbursable)
+  if (!exp.length) return 0
+  const months = new Set(exp.map(e => monthOf(e.date)))
+  return exp.reduce((s, e) => s + (+e.amount || 0), 0) / Math.max(months.size, 1)
+}
+export const totalSaved = (allSaving) => allSaving.filter(e => e.type === 'saving').reduce((s, e) => s + (+e.amount || 0), 0)
+
+export function monthEndForecast(entries, settings, ym) {
+  const r = buildReport(entries, settings, ym)
+  const today = +todayISO().slice(8), dim = daysInMonth(ym), left = dim - today
+  const dailyRate = r.totalSpent / Math.max(today, 1)
+  const posted = new Set(entries.filter(e => e.recurringId && monthOf(e.date) === ym).map(e => e.recurringId))
+  const unpostedRec = (settings.recurring || []).filter(x => !posted.has(x.id)).reduce((s, x) => s + (+x.amount || 0), 0)
+  const projSpend = r.totalSpent + dailyRate * left + unpostedRec
+  return { projSpend, projSaved: r.income - projSpend, dailyRate, left, unpostedRec, income: r.income }
+}
+
+export function streaks(entries) {
+  const days = new Set(entries.filter(e => e.type !== 'income' && e.date).map(e => e.date))
+  let s = 0, cur = todayISO()
+  while (days.has(cur)) { s++; cur = shiftISO(cur, -1) }
+  const ym = curMonth(), today = +todayISO().slice(8)
+  const spendDays = new Set(entries.filter(e => monthOf(e.date) === ym && (e.type === 'expense' || !e.type) && !e.reimbursable && +e.amount > 0).map(e => e.date))
+  let noSpend = 0; for (let i = 1; i <= today; i++) if (!spendDays.has(`${ym}-${String(i).padStart(2, '0')}`)) noSpend++
+  return { logStreak: s, noSpend }
+}
+
+export function weeklyDigest(entries) {
+  const today = todayISO(), from = shiftISO(today, -6), pFrom = shiftISO(today, -13), pTo = shiftISO(today, -7)
+  const ok = e => (e.type === 'expense' || !e.type) && !e.reimbursable
+  const inR = (a, b) => entries.filter(e => ok(e) && e.date >= a && e.date <= b)
+  const cur = inR(from, today), prev = inR(pFrom, pTo)
+  const sum = a => a.reduce((s, e) => s + (+e.amount || 0), 0)
+  const byCat = {}; cur.forEach(e => byCat[e.category] = (byCat[e.category] || 0) + (+e.amount || 0))
+  const top = Object.entries(byCat).sort((a, b) => b[1] - a[1])[0]
+  return { spent: sum(cur), count: cur.length, top: top ? { cat: top[0], amt: top[1] } : null, delta: sum(cur) - sum(prev) }
+}
+
+export function yearReview(allEntries, settings, fy = curFY()) {
+  const rows = allEntries.filter(e => fyOf(e.date) === fy)
+  const exp = rows.filter(e => (e.type === 'expense' || !e.type) && !e.reimbursable)
+  const spent = exp.reduce((s, e) => s + (+e.amount || 0), 0)
+  const incE = rows.filter(e => e.type === 'income').reduce((s, e) => s + (+e.amount || 0), 0)
+  const saved = rows.filter(e => e.type === 'saving').reduce((s, e) => s + (+e.amount || 0), 0)
+  const months = new Set(rows.map(e => monthOf(e.date)))
+  const byM = {}; exp.forEach(e => byM[monthOf(e.date)] = (byM[monthOf(e.date)] || 0) + (+e.amount || 0))
+  const big = Object.entries(byM).sort((a, b) => b[1] - a[1])[0]
+  const byCat = {}; exp.forEach(e => byCat[e.category] = (byCat[e.category] || 0) + (+e.amount || 0))
+  const topCats = Object.entries(byCat).map(([k, v]) => ({ key: k, icon: CAT_ICON[k] || '🧾', amt: v })).sort((a, b) => b.amt - a.amt).slice(0, 5)
+  return { fy, income: incE + (+settings.salary || 0) * months.size, spent, saved, months: months.size, biggestMonth: big ? { ym: big[0], amt: big[1] } : null, topCats }
+}
+
+export function goalETA(saved, target, monthlyRate) {
+  if (saved >= target) return { done: true, months: 0 }
+  if (!monthlyRate || monthlyRate <= 0) return { months: null }
+  const months = Math.ceil((target - saved) / monthlyRate)
+  return { months, date: months < 600 ? addMonths(curMonth(), months) : null }
 }
 
 // ---- cloud sync (Supabase REST; activates only when configured) ----

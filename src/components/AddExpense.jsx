@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { CATEGORIES, METHODS, TAX_SECTIONS, todayISO, uid, inr, parseSMS, suggestCategory } from '../data.js'
+import { CATEGORIES, METHODS, TAX_SECTIONS, todayISO, uid, inr, parseSMS, parseVoice, suggestCategory, CAT_KEYS } from '../data.js'
 
 export default function AddExpense({ settings, setSettings, entries, editing, onSave, onDone }) {
   const isEdit = !!editing
@@ -19,7 +19,28 @@ export default function AddExpense({ settings, setSettings, entries, editing, on
   const [pasteTxt, setPasteTxt] = useState('')
   const [sugg, setSugg] = useState(null)
   const [toast, setToast] = useState('')
+  const [listening, setListening] = useState(false)
+  const [payPrompt, setPayPrompt] = useState(null)
   const fileRef = useRef(null)
+  const recRef = useRef(null)
+
+  const startVoice = () => {
+    const SR = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition)
+    if (!SR) { setToast('Voice input not supported in this browser'); setTimeout(() => setToast(''), 2500); return }
+    const rec = new SR(); recRef.current = rec; rec.lang = 'en-IN'; rec.interimResults = false; rec.maxAlternatives = 1
+    rec.onresult = (ev) => {
+      const txt = ev.results[0][0].transcript; const p = parseVoice(txt); if (!p) return
+      if (p.amount) setAmount(String(p.amount))
+      if (p.type === 'income') setType('income')
+      if (p.category) setCategory(p.category)
+      else { const g = suggestCategory(p.note, entries); if (g) setCategory(g) }
+      if (p.note) setNote(p.note)
+      setToast(`Heard: “${txt}” — check & save`); setTimeout(() => setToast(''), 3000)
+    }
+    rec.onerror = () => { setListening(false); setToast('Didn’t catch that, try again'); setTimeout(() => setToast(''), 2000) }
+    rec.onend = () => setListening(false)
+    setListening(true); rec.start()
+  }
 
   const commit = (entry) => { onSave(entry); if (type !== 'saving') setSettings(s => ({ ...s, lastCategory: entry.category, lastMethod: entry.method })) }
 
@@ -56,6 +77,13 @@ export default function AddExpense({ settings, setSettings, entries, editing, on
     }
     commit(entry)
     if (isEdit) return onDone()
+    // pay-yourself-first: offer to move target savings to a goal after logging income
+    if (type === 'income') {
+      const budgetTotal = CAT_KEYS.reduce((s, k) => s + (+settings.budgets[k] || 0), 0)
+      const suggest = Math.max(0, Math.round((+settings.salary || amt) - budgetTotal) || Math.round(amt * 0.2))
+      const goal = settings.goals?.[0]
+      if (goal && suggest > 0) setPayPrompt({ amount: suggest, goalId: goal.id, goalName: goal.name })
+    }
     setToast(`${label(type)} ${inr(amt)} saved ✓`)
     setAmount(''); setNote(''); setReimbursable(false); setSplit(false); setTotal(''); setOwedBy(''); setTaxSection(''); setReceipt(''); setSugg(null)
     setTimeout(() => setToast(''), 2000)
@@ -65,9 +93,19 @@ export default function AddExpense({ settings, setSettings, entries, editing, on
 
   return (
     <div className="stack">
+      {payPrompt && (
+        <div className="card pad payfirst">
+          <b>🏦 Pay yourself first</b>
+          <p className="sm">Move your planned savings <b>{inr(payPrompt.amount)}</b> to “{payPrompt.goalName}” now — before it gets spent.</p>
+          <div className="btnrow">
+            <button className="btn primary sm" onClick={() => { onSave({ id: uid(), type: 'saving', amount: payPrompt.amount, category: 'Savings', method: 'UPI', date: todayISO(), note: payPrompt.goalName, goalId: payPrompt.goalId }); setPayPrompt(null); setToast('Moved to savings ✓'); setTimeout(() => setToast(''), 2000) }}>Move {inr(payPrompt.amount)}</button>
+            <button className="btn sm" onClick={() => setPayPrompt(null)}>Not now</button>
+          </div>
+        </div>
+      )}
       {!isEdit && type === 'expense' && (
         <div className="card pad">
-          <div className="between"><b>⚡ Quick add</b><button className="btn sm" onClick={() => setPasteOpen(o => !o)}>📩 Paste SMS</button></div>
+          <div className="between"><b>⚡ Quick add</b><div className="qa-actions"><button className={'btn sm' + (listening ? ' listening' : '')} onClick={startVoice} disabled={listening}>{listening ? '🎙️ Listening…' : '🎙️ Voice'}</button><button className="btn sm" onClick={() => setPasteOpen(o => !o)}>📩 Paste SMS</button></div></div>
           {pasteOpen && (
             <div className="pastebox">
               <textarea rows={3} placeholder="Paste a bank / UPI SMS here…" value={pasteTxt} onChange={e => setPasteTxt(e.target.value)} />

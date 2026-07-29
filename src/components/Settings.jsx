@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { CATEGORIES, DEFAULT_BUDGETS, CAT_KEYS, inr, uid, cloudPush, cloudPull } from '../data.js'
+import { CATEGORIES, DEFAULT_BUDGETS, CAT_KEYS, inr, uid, cloudPush, cloudPull, detectRecurring } from '../data.js'
 
 export default function Settings({ settings, setSettings, entries, setEntries, archives = [], setArchives, onCloseMonth }) {
   const fileRef = useRef(null)
@@ -20,6 +20,11 @@ export default function Settings({ settings, setSettings, entries, setEntries, a
   const sub = listOps('subscriptions', { name: 'Netflix', amount: 199, cycle: 'monthly', renewDay: 1, active: true })
   const goal = listOps('goals', { name: 'New goal', target: 50000 })
   const setLoan = (p) => setSettings(s => ({ ...s, loan: { ...s.loan, ...p } }))
+
+  const allEntries = [...entries, ...archives.flatMap(a => a.entries || [])]
+  const suggestions = detectRecurring(allEntries, settings)
+  const addSuggestion = (s) => setSettings(st => ({ ...st, recurring: [...(st.recurring || []), { id: uid(), category: s.category, amount: s.amount, method: 'AutoPay', note: 'auto-detected', day: s.day }] }))
+  const dismissSuggestion = (key) => setSettings(st => ({ ...st, dismissedRecurring: [...(st.dismissedRecurring || []), key] }))
 
   const exportData = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify({ settings, entries, archives }, null, 2)], { type: 'application/json' })); a.download = `paisa-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click() }
   const importData = (e) => { const f = e.target.files?.[0]; if (!f) return; const rd = new FileReader(); rd.onload = () => { try { const d = JSON.parse(rd.result); if (d.settings) setSettings(d.settings); if (Array.isArray(d.entries)) setEntries(d.entries); if (Array.isArray(d.archives)) setArchives(d.archives); alert('Restored ✓') } catch { alert('Invalid file') } }; rd.readAsText(f) }
@@ -84,6 +89,19 @@ export default function Settings({ settings, setSettings, entries, setEntries, a
         <div className="budgetgrid">{CATEGORIES.map(c => <label className="bgt" key={c.key}><span>{c.icon} {c.key} <em>{c.group}</em></span><input type="number" value={settings.budgets[c.key] ?? c.budget} onChange={e => setBudget(c.key, e.target.value)} /></label>)}</div>
         <div className="sm muted" style={{ marginTop: 8 }}>Total ideal budget: <b>{inr(totalBudget)}</b> · target savings: <b className={settings.salary - totalBudget >= 0 ? 'good' : 'bad'}>{inr(settings.salary - totalBudget)}</b></div>
       </div>
+
+      {suggestions.length > 0 && (
+        <div className="card pad">
+          <b>💡 Suggested recurring (auto-detected)</b>
+          <p className="muted sm">These amounts repeat across months in your history — add them as recurring so they auto-fill?</p>
+          {suggestions.map(s => (
+            <div className="suggrow" key={s.key}>
+              <span>{s.icon} {s.category} · <b>{inr(s.amount)}</b> <span className="muted sm">seen in {s.months} months</span></span>
+              <span className="suggbtns"><button className="btn sm primary" onClick={() => addSuggestion(s)}>+ Add</button><button className="ico del" title="Dismiss" onClick={() => dismissSuggestion(s.key)}>✕</button></span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <Section title="🔁 Recurring (auto-fill each month)" onAdd={rec.add} hint="Fixed costs; a banner posts them in one tap monthly.">
         {(settings.recurring || []).map(r => (

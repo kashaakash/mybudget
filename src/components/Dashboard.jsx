@@ -1,6 +1,7 @@
 import { curMonth, monthLabel, buildReport, goalSaved, receivables, inr, COLORS, CAT_ICON, daysInMonth, todayISO } from '../data.js'
 
-export default function Dashboard({ entries, settings, onQuickAdd, onGoto }) {
+export default function Dashboard({ entries, archives = [], settings, onQuickAdd, onGoto }) {
+  const allSaving = [...entries, ...archives.flatMap(a => a.entries || [])]
   const ym = curMonth()
   const r = buildReport(entries, settings, ym)
   const spentPct = r.income > 0 ? Math.min(100, (r.totalSpent / r.income) * 100) : 0
@@ -50,7 +51,7 @@ export default function Dashboard({ entries, settings, onQuickAdd, onGoto }) {
 
       {/* Goals */}
       <div className="card pad goalcard" onClick={() => onGoto('money')} role="button">
-        {(settings.goals || []).slice(0, 2).map(g => { const saved = goalSaved(entries, g.id); const pct = g.target ? Math.min(100, saved / g.target * 100) : 0; return (
+        {(settings.goals || []).slice(0, 2).map(g => { const saved = goalSaved(allSaving, g.id); const pct = g.target ? Math.min(100, saved / g.target * 100) : 0; return (
           <div key={g.id} style={{ marginBottom: 8 }}>
             <div className="between"><b>🎯 {g.name}</b><span className="muted">{inr(saved)} / {inr(g.target)}</span></div>
             <div className="bar"><div className="fill" style={{ width: pct + '%', background: 'linear-gradient(90deg,#0EA5A4,#16A34A)' }} /></div>

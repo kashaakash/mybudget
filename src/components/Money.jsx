@@ -4,7 +4,8 @@ import {
   monthLabel, monthShort, inr, uid, todayISO, curFY
 } from '../data.js'
 
-export default function Money({ entries, settings, setSettings, addEntry, onPatch }) {
+export default function Money({ entries, archives = [], settings, setSettings, addEntry, onRestore, onDelete }) {
+  const allSaving = [...entries, ...archives.flatMap(a => a.entries || [])]
   const loan = loanSchedule(settings.loan)
   const owed = receivables(entries)
   const tax = taxSummary(entries, settings)
@@ -27,7 +28,7 @@ export default function Money({ entries, settings, setSettings, addEntry, onPatc
       <div className="card pad">
         <b>🎯 Goals</b>
         {(settings.goals || []).map(g => {
-          const saved = goalSaved(entries, g.id); const pct = g.target ? Math.min(100, saved / g.target * 100) : 0
+          const saved = goalSaved(allSaving, g.id); const pct = g.target ? Math.min(100, saved / g.target * 100) : 0
           return (
             <div key={g.id} className="goalline">
               <div className="between"><span>{g.name}</span><span className="muted">{inr(saved)} / {inr(g.target)}</span></div>
@@ -113,6 +114,31 @@ export default function Money({ entries, settings, setSettings, addEntry, onPatc
         )}
       </div>
 
+      {/* Archived periods */}
+      <div className="card pad">
+        <b>📦 Archived periods</b>
+        {archives.length === 0 ? <p className="muted sm">Close a month in Setup → it's archived here (kept forever, fully viewable) and the active view resets to a fresh start.</p> : (
+          archives.map(a => { const s = a.summary || {}; return (
+            <details className="arch" key={a.id}>
+              <summary><b>{a.label}</b><span className="muted sm"> · {s.count || 0} txns · spent {inr(s.spent || 0)} · saved {inr(s.saved || 0)}</span></summary>
+              <div className="archbody">
+                <div className="mini2">
+                  <div className="minicard"><span>Income</span><b>{inr(s.income || 0)}</b></div>
+                  <div className="minicard"><span>Saved</span><b className={(s.saved || 0) >= 0 ? 'good' : 'bad'}>{inr(s.saved || 0)} · {(s.savingsRate || 0).toFixed(0)}%</b></div>
+                </div>
+                {(s.from || s.to) && <div className="sm muted">{s.from} → {s.to} · {s.months} month(s) · closed {a.closedAt}</div>}
+                <table className="tbl"><tbody>{(s.catRows || []).slice(0, 12).map(c => <tr key={c.key}><td>{c.icon} {c.key}</td><td className="n">{inr(c.actual)}</td></tr>)}</tbody></table>
+                <div className="btnrow">
+                  <button className="btn sm" onClick={() => exportArchive(a)}>⬇ CSV</button>
+                  <button className="btn sm" onClick={() => { if (confirm(`Restore “${a.label}” back into the active view?`)) onRestore(a.id) }}>↩ Restore</button>
+                  <button className="btn sm danger" onClick={() => { if (confirm(`Permanently delete archive “${a.label}”? (Export a backup first if unsure.)`)) onDelete(a.id) }}>🗑 Delete</button>
+                </div>
+              </div>
+            </details>
+          ) })
+        )}
+      </div>
+
       {/* Tax helper */}
       <div className="card pad">
         <b>🧾 Tax helper — FY {tax.fy}</b>
@@ -125,6 +151,12 @@ export default function Money({ entries, settings, setSettings, addEntry, onPatc
       </div>
     </div>
   )
+}
+
+function exportArchive(a) {
+  const L = [['Date', 'Type', 'Category', 'Method', 'Amount', 'Reimbursable', 'Owed', 'Note']]
+  ;(a.entries || []).slice().sort((x, y) => (x.date < y.date ? 1 : -1)).forEach(e => L.push([e.date, e.type || 'expense', e.category, e.method, e.amount, e.reimbursable ? 'yes' : '', e.owed || '', (e.note || '').replace(/,/g, ';')]))
+  const el = document.createElement('a'); el.href = URL.createObjectURL(new Blob([L.map(l => l.join(',')).join('\n')], { type: 'text/csv' })); el.download = `paisa-archive-${a.label}.csv`; el.click()
 }
 
 function dupWarn(subs) {

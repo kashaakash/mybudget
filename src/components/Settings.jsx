@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react'
 import { CATEGORIES, DEFAULT_BUDGETS, CAT_KEYS, inr, uid, cloudPush, cloudPull } from '../data.js'
 
-export default function Settings({ settings, setSettings, entries, setEntries, onLock }) {
+export default function Settings({ settings, setSettings, entries, setEntries, archives = [], setArchives, onCloseMonth }) {
   const fileRef = useRef(null)
   const [msg, setMsg] = useState('')
+  const [closeLabel, setCloseLabel] = useState('')
   const totalBudget = CAT_KEYS.reduce((s, k) => s + (+settings.budgets[k] || 0), 0)
   const patch = (p) => setSettings(s => ({ ...s, ...p }))
   const setBudget = (k, v) => setSettings(s => ({ ...s, budgets: { ...s.budgets, [k]: +v || 0 } }))
@@ -20,16 +21,16 @@ export default function Settings({ settings, setSettings, entries, setEntries, o
   const goal = listOps('goals', { name: 'New goal', target: 50000 })
   const setLoan = (p) => setSettings(s => ({ ...s, loan: { ...s.loan, ...p } }))
 
-  const exportData = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify({ settings, entries }, null, 2)], { type: 'application/json' })); a.download = `paisa-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click() }
-  const importData = (e) => { const f = e.target.files?.[0]; if (!f) return; const rd = new FileReader(); rd.onload = () => { try { const d = JSON.parse(rd.result); if (d.settings) setSettings(d.settings); if (Array.isArray(d.entries)) setEntries(d.entries); alert('Restored ✓') } catch { alert('Invalid file') } }; rd.readAsText(f) }
+  const exportData = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify({ settings, entries, archives }, null, 2)], { type: 'application/json' })); a.download = `paisa-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click() }
+  const importData = (e) => { const f = e.target.files?.[0]; if (!f) return; const rd = new FileReader(); rd.onload = () => { try { const d = JSON.parse(rd.result); if (d.settings) setSettings(d.settings); if (Array.isArray(d.entries)) setEntries(d.entries); if (Array.isArray(d.archives)) setArchives(d.archives); alert('Restored ✓') } catch { alert('Invalid file') } }; rd.readAsText(f) }
   const clearAll = () => { if (confirm('Delete ALL entries?')) setEntries([]) }
 
   const setPin = () => { const p = prompt('Set a 4-digit PIN (blank to remove):', settings.pin || ''); if (p === null) return; patch({ pin: p.trim() }); setMsg(p.trim() ? 'PIN set ✓' : 'PIN removed'); setTimeout(() => setMsg(''), 2000) }
 
   const cloud = settings.cloud || {}
   const setCloud = (p) => setSettings(s => ({ ...s, cloud: { ...s.cloud, ...p } }))
-  const doPush = async () => { try { setMsg('Syncing…'); await cloudPush(cloud, { settings, entries }); setMsg('Backed up to cloud ✓') } catch (e) { setMsg('⚠️ ' + e.message) } setTimeout(() => setMsg(''), 4000) }
-  const doPull = async () => { try { setMsg('Fetching…'); const d = await cloudPull(cloud); if (d) { if (d.settings) setSettings(d.settings); if (d.entries) setEntries(d.entries); setMsg('Restored from cloud ✓') } else setMsg('No cloud data found') } catch (e) { setMsg('⚠️ ' + e.message) } setTimeout(() => setMsg(''), 4000) }
+  const doPush = async () => { try { setMsg('Syncing…'); await cloudPush(cloud, { settings, entries, archives }); setMsg('Backed up to cloud ✓') } catch (e) { setMsg('⚠️ ' + e.message) } setTimeout(() => setMsg(''), 4000) }
+  const doPull = async () => { try { setMsg('Fetching…'); const d = await cloudPull(cloud); if (d) { if (d.settings) setSettings(d.settings); if (d.entries) setEntries(d.entries); if (Array.isArray(d.archives)) setArchives(d.archives); setMsg('Restored from cloud ✓') } else setMsg('No cloud data found') } catch (e) { setMsg('⚠️ ' + e.message) } setTimeout(() => setMsg(''), 4000) }
 
   return (
     <div className="stack">
@@ -42,6 +43,18 @@ export default function Settings({ settings, setSettings, entries, setEntries, o
           <div className="field"><span>App lock</span><button className="btn" onClick={setPin}>{settings.pin ? '🔒 Change / remove PIN' : '🔓 Set a PIN'}</button></div>
         </div>
         <label className="check" style={{ marginTop: 10 }}><input type="checkbox" checked={!!settings.rollover} onChange={e => patch({ rollover: e.target.checked })} /><span>Roll unspent budget into savings view</span></label>
+      </div>
+
+      <div className="card pad">
+        <b>🔄 Close month & start fresh</b>
+        <p className="muted sm">Archives all current entries (kept forever & viewable in <b>Money → Archived periods</b>) and clears the active view for a clean new month. Items still <b>“to collect”</b> carry forward, and <b>goal progress is preserved</b>.</p>
+        <div className="row2" style={{ marginTop: 8 }}>
+          <label className="field"><span>Archive label</span><input placeholder="e.g. July 2026" value={closeLabel} onChange={e => setCloseLabel(e.target.value)} /></label>
+          <div className="field"><span>&nbsp;</span>
+            <button className="btn primary" onClick={() => { if (confirm('Archive all current data and start a fresh month? (Your data is kept and viewable in Money.)')) { onCloseMonth(closeLabel.trim()); setCloseLabel(''); setMsg('Archived ✓ — fresh start'); setTimeout(() => setMsg(''), 2500) } }}>Close & start new month</button>
+          </div>
+        </div>
+        {archives.length > 0 && <div className="sm muted">{archives.length} archived period{archives.length > 1 ? 's' : ''} · view them in the Money tab.</div>}
       </div>
 
       <Section title="🎯 Goals" onAdd={goal.add}>

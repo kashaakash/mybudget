@@ -1,5 +1,5 @@
 import { useState, useEffect, lazy, Suspense } from 'react'
-import { useLocalStorage, mergeSettings, monthOf, curMonth, uid, todayISO, inr } from './data.js'
+import { useLocalStorage, mergeSettings, monthOf, curMonth, uid, todayISO, inr, archiveSummary } from './data.js'
 import Dashboard from './components/Dashboard.jsx'
 import AddExpense from './components/AddExpense.jsx'
 import ExpenseList from './components/ExpenseList.jsx'
@@ -21,6 +21,7 @@ const TABS = [
 export default function App() {
   const [tab, setTab] = useState('dashboard')
   const [entries, setEntries] = useLocalStorage('paisa_entries', [])
+  const [archives, setArchives] = useLocalStorage('paisa_archives', [])
   const [settings, setSettings] = useLocalStorage('paisa_settings', undefined, mergeSettings)
   const [editing, setEditing] = useState(null)
   const [locked, setLocked] = useState(!!settings.pin)
@@ -42,6 +43,22 @@ export default function App() {
     const news = unposted.map(r => ({ id: uid(), type: 'expense', amount: +r.amount || 0, category: r.category, method: r.method || 'AutoPay', date: `${ym}-${String(Math.min(+r.day || 1, +todayISO().slice(8))).padStart(2, '0')}`, note: r.note || 'recurring', recurringId: r.id }))
     setEntries(prev => [...news, ...prev])
   }
+
+  // ---- close month & start fresh: archive everything, carry forward unsettled receivables ----
+  const closeMonth = (label) => {
+    if (!entries.length) { alert('Nothing to archive yet.'); return }
+    const snap = { id: uid(), label: label || curMonth(), closedAt: todayISO(), entries, settings: { salary: settings.salary, budgets: settings.budgets, goals: settings.goals }, summary: archiveSummary(entries, settings) }
+    const carry = entries.filter(e => (e.reimbursable || (+e.owed > 0)) && !e.settled)  // still-owed items follow you
+    setArchives(a => [snap, ...a])
+    setEntries(carry)
+    go('dashboard')
+  }
+  const restoreArchive = (id) => {
+    const a = archives.find(x => x.id === id); if (!a) return
+    setEntries(prev => { const ids = new Set(prev.map(e => e.id)); return [...a.entries.filter(e => !ids.has(e.id)), ...prev] })
+    setArchives(prev => prev.filter(x => x.id !== id))
+  }
+  const deleteArchive = (id) => setArchives(prev => prev.filter(x => x.id !== id))
 
   if (locked) return <PinGate pin={settings.pin} onUnlock={() => setLocked(false)} />
 
@@ -68,12 +85,12 @@ export default function App() {
             <button className="btn sm primary" onClick={postRecurring}>Add them</button>
           </div>
         )}
-        {tab === 'dashboard' && <Dashboard entries={entries} settings={settings} onQuickAdd={() => go('add')} onGoto={go} />}
+        {tab === 'dashboard' && <Dashboard entries={entries} archives={archives} settings={settings} onQuickAdd={() => go('add')} onGoto={go} />}
         {tab === 'add' && <AddExpense settings={settings} setSettings={setSettings} entries={entries} editing={editing} onSave={(e) => { editing ? updateEntry(e) : addEntry(e); setEditing(null) }} onDone={() => go('dashboard')} />}
         {tab === 'expenses' && <ExpenseList entries={entries} onDelete={deleteEntry} onEdit={startEdit} onPatch={patchEntry} />}
         {tab === 'report' && <Suspense fallback={<div className="card pad muted">Loading charts…</div>}><Report entries={entries} settings={settings} /></Suspense>}
-        {tab === 'money' && <Suspense fallback={<div className="card pad muted">Loading…</div>}><Money entries={entries} settings={settings} setSettings={setSettings} addEntry={addEntry} onPatch={patchEntry} /></Suspense>}
-        {tab === 'settings' && <Settings settings={settings} setSettings={setSettings} entries={entries} setEntries={setEntries} onLock={() => setLocked(!!settings.pin)} />}
+        {tab === 'money' && <Suspense fallback={<div className="card pad muted">Loading…</div>}><Money entries={entries} archives={archives} settings={settings} setSettings={setSettings} addEntry={addEntry} onRestore={restoreArchive} onDelete={deleteArchive} /></Suspense>}
+        {tab === 'settings' && <Settings settings={settings} setSettings={setSettings} entries={entries} setEntries={setEntries} archives={archives} setArchives={setArchives} onCloseMonth={closeMonth} />}
       </main>
 
       <footer className="foot">Private — data in <b>this browser</b> only (unless cloud sync is on). Back up from Setup · Built for Aakash</footer>

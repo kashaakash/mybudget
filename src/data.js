@@ -117,6 +117,24 @@ export function goalSaved(entries, goalId) {
   return entries.filter(e => e.type === 'saving' && (e.goalId === goalId || (!e.goalId && goalId === 'g1'))).reduce((s, e) => s + (+e.amount || 0), 0)
 }
 
+// frozen summary stored when a period is archived ("close month & start fresh")
+export function archiveSummary(entries, settings) {
+  const exp = entries.filter(e => (e.type === 'expense' || !e.type) && !e.reimbursable)
+  const spent = exp.reduce((s, e) => s + (+e.amount || 0), 0)
+  const incomeEntries = entries.filter(e => e.type === 'income').reduce((s, e) => s + (+e.amount || 0), 0)
+  const savings = entries.filter(e => e.type === 'saving').reduce((s, e) => s + (+e.amount || 0), 0)
+  const lent = entries.filter(e => e.reimbursable).reduce((s, e) => s + (+e.amount || 0), 0)
+  const dates = entries.map(e => e.date).filter(Boolean).sort()
+  const months = new Set(entries.map(e => monthOf(e.date))).size || 1
+  const income = incomeEntries + (+settings.salary || 0) * months
+  const byCat = {}
+  for (const e of exp) byCat[e.category] = (byCat[e.category] || 0) + (+e.amount || 0)
+  const byMethod = {}
+  for (const e of exp) byMethod[e.method || 'Other'] = (byMethod[e.method || 'Other'] || 0) + (+e.amount || 0)
+  const catRows = Object.entries(byCat).map(([key, actual]) => ({ key, icon: CAT_ICON[key] || '🧾', actual })).sort((a, b) => b.actual - a.actual)
+  return { from: dates[0] || '', to: dates[dates.length - 1] || '', months, count: entries.length, income, spent, saved: income - spent, savingsRate: income > 0 ? (income - spent) / income * 100 : 0, savings, lent, catRows, byMethod }
+}
+
 // receivables: who owes you (from reimbursable + split 'owed')
 export function receivables(entries) {
   const map = {}
